@@ -11,6 +11,8 @@ from utils.general import check_img_size, non_max_suppression, scale_coords
 from utils.plots import plot_one_box
 from utils.torch_utils import select_device, time_synchronized
 
+from perspective_transform.perspective_transform import perspective
+
 
 def main(opt):
     weights, images, img_size, confidence, iou, device = \
