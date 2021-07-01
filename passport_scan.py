@@ -108,7 +108,6 @@ def main(opt):
             elif nameBool is False: surName += s
             else: givenNames += s
 
-
         # result print
         print("\n\n--------- Passport Scan Result ---------")
         print('Type            :', result[0:2].replace('<', ''))
@@ -122,6 +121,16 @@ def main(opt):
         print('Date of expiry  :', result[66:72].replace('<', ''))
         print("----------------------------------------\n")
         cv2.waitKey(0)
+
+
+# mrz 영어, 숫자 보정
+def mrzCorrection(value, flag):
+    if flag is 'en2dg':
+        return value.replace('O', '0').replace('Q', '0').replace('U', '0').replace('D', '0')\
+            .replace('I', '1').replace('Z', '2').replace('B', '3').replace('A', '4').replace('S', '5')
+    else:
+        return value.replace('0', 'O').replace('1', 'I').replace('2', 'Z').replace('3', 'B')\
+            .replace('4', 'A').replace('8', 'B')
 
 
 # 이미지 크롭
