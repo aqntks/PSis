@@ -27,6 +27,8 @@ from utils.general import check_requirements, check_file, check_dataset, xywh2xy
     xyn2xy, segment2box, segments2boxes, resample_segments, clean_str
 from utils.torch_utils import torch_distributed_zero_first
 
+from perspective_transform.perspective_transform import perspective
+
 # Parameters
 help_url = 'https://github.com/ultralytics/yolov5/wiki/Train-Custom-Data'
 img_formats = ['bmp', 'jpg', 'jpeg', 'png', 'tif', 'tiff', 'dng', 'webp', 'mpo']  # acceptable image suffixes
@@ -184,7 +186,10 @@ class LoadImages:  # for inference
         else:
             # Read image
             self.count += 1
-            img0 = cv2.imread(path)  # BGR
+            real = cv2.imread(path)  # BGR
+
+            img0 = self.crop((0, int(real.shape[0] / 2), real.shape[1], real.shape[0]), real)
+            # img0 = perspective(img0)
             assert img0 is not None, 'Image Not Found ' + path
             print(f'image {self.count}/{self.nf} {path}: ', end='')
 
@@ -195,7 +200,7 @@ class LoadImages:  # for inference
         img = img[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB and HWC to CHW
         img = np.ascontiguousarray(img)
 
-        return path, img, img0, self.cap
+        return path, img, img0, self.cap, real
 
     def new_video(self, path):
         self.frame = 0
@@ -205,6 +210,10 @@ class LoadImages:  # for inference
     def __len__(self):
         return self.nf  # number of files
 
+    def crop(self, rect, im0s):
+        x1, y1, x2, y2 = int(rect[0]), int(rect[1]), int(rect[2]), int(rect[3])
+        img_crop = im0s[y1:y2, x1:x2]
+        return img_crop
 
 class LoadWebcam:  # for inference
     def __init__(self, pipe='0', img_size=640, stride=32):
