@@ -1,7 +1,7 @@
 import os
 import cv2
 import numpy as np
-from point import Point
+from perspective_transform.point import Point
 import ctypes as c
 
 

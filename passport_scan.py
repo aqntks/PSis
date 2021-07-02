@@ -92,45 +92,135 @@ def main(opt):
 
             showImg(det, names, im0s, colors)
         # print('\n' + result)
-        nameCheck, nameBool, nameTemp = 0, False, result[5:44]
-        surName, givenNames = '', ''
-        for s in nameTemp:
-            if s == '<':
-                nameCheck += 1
-            else:
-                if nameCheck == 1: nameCheck = 0
 
-            if nameCheck == 2 and nameBool is True:
-                break
-            elif nameCheck == 2:
-                nameCheck = 0
-                nameBool = True
-            elif nameBool is False: surName += s
-            else: givenNames += s
+        surName, givenNames = spiltName(result[5:44])
+        passportType = typeCorrection(mrzCorrection(result[0:2].replace('<', ''), 'dg2en'))
+        issuingCounty = nationCorrection(mrzCorrection(result[2:5], 'dg2en'))
+        nationality = nationCorrection(mrzCorrection(result[55:58], 'dg2en'))
+        passportNo = result[45:54].replace('<', '')
+        sur = mrzCorrection(surName.replace('<', ' ').strip(), 'dg2en')
+        given = mrzCorrection(givenNames.replace('<', ' ').strip(), 'dg2en')
+        personalNo = mrzCorrection(result[73:80].replace('<', ''), 'en2dg')
+        birth = mrzCorrection(result[58:64].replace('<', ''), 'en2dg')
+        sex = sexCorrection(mrzCorrection(result[65].replace('<', ''), 'dg2en'))
+        expiry = mrzCorrection(result[66:72].replace('<', ''), 'en2dg')
 
         # result print
         print("\n\n--------- Passport Scan Result ---------")
-        print('Type            :', result[0:2].replace('<', ''))
-        print('Issuing county  :', result[2:5])
-        print('Passport No.    :', result[45:54].replace('<', ''))
-        print('Surname         :', surName.replace('<', ' ').strip())
-        print('Given names     :', givenNames.replace('<', ' ').strip())
-        # print('Personal No.    :', result[73:80].replace('<', ''))
-        print('Date of birth   :', result[58:64].replace('<', ''))
-        print('Sex             :', result[65].replace('<', ''))
-        print('Date of expiry  :', result[66:72].replace('<', ''))
+        print('Type            :', passportType)
+        print('Issuing county  :', issuingCounty)
+        print('Passport No.    :', passportNo)
+        print('Surname         :', sur)
+        print('Given names     :', given)
+        print('Nationality     :', nationality)
+        # print('Personal No.    :', personalNo)
+        print('Date of birth   :', birth)
+        print('Sex             :', sex)
+        print('Date of expiry  :', expiry)
         print("----------------------------------------\n")
         cv2.waitKey(0)
 
 
+# 국가 보정
+def nationCorrection(value):
+    # 국가명 파일 로드
+    f = open("weights/nationality.txt", 'r')
+    nationality = []
+    while True:
+        line = f.readline()
+        if not line: break
+        nationality.append(line)
+    f.close()
+
+    # 글자수 체크
+    if len(value) != 3: return value
+
+    # 국가명 확인
+    for nation in nationality:
+        if nation == value:
+            return value
+
+    count, resultNation = 0, ''
+
+    # 앞에 두자리 맞으면 비슷한 국가 출력
+    strFront = value[0:2]
+    for nation in nationality:
+        if len(nation) != 3: continue
+        if count > 1: return nation  # 오탐일 경우 재 탐색하는 기능 여부에 따라 수정
+        if strFront == nation[0:2]:
+            count += 1
+            resultNation = nation
+
+    if count == 1: return resultNation
+    count, resultNation = 0, ''
+
+    # 뒤의 두자리 맞으면 비슷한 국가 출력
+    strBack = value[1:]
+    for nation in nationality:
+        if len(nation) != 3: continue
+        if count > 1: return nation   # 오탐일 경우 재 탐색하는 기능 여부에 따라 수정
+        if strBack == nation[1:]:
+            count += 1
+            resultNation = nation
+
+    if count == 1: return resultNation
+    count, resultNation = 0, ''
+
+    # 중간만 틀렸을 때 비슷한 국가 출력
+    strMiddle = value[0] + value[2]
+    for nation in nationality:
+        nation = nation[0] + nation[2]
+        if len(nation) != 3: continue
+        if count > 1: return nation  # 오탐일 경우 재 탐색하는 기능 여부에 따라 수정
+        if strMiddle == nation:
+            count += 1
+            resultNation = nation
+
+    if count == 1: return resultNation
+    return value
+
+
 # mrz 영어, 숫자 보정
 def mrzCorrection(value, flag):
-    if flag is 'en2dg':
+    if flag == 'en2dg':
         return value.replace('O', '0').replace('Q', '0').replace('U', '0').replace('D', '0')\
             .replace('I', '1').replace('Z', '2').replace('B', '3').replace('A', '4').replace('S', '5')
     else:
         return value.replace('0', 'O').replace('1', 'I').replace('2', 'Z').replace('3', 'B')\
             .replace('4', 'A').replace('8', 'B')
+
+
+# 성별 보정
+def sexCorrection(value):
+    return value.replace('P', 'F').replace('T', 'F').replace('N', 'M')
+
+
+# 여권 타입 보정
+def typeCorrection(value):
+    return value.replace('FM', 'PM').replace('PN', 'PM')
+
+
+# 이름 Surname, GivenName 분리
+def spiltName(name):
+    nameCheck, nameBool = 0, False
+    surName, givenNames = '', ''
+    for s in name:
+        if s == '<':
+            nameCheck += 1
+        else:
+            if nameCheck == 1: nameCheck = 0
+
+        if nameCheck == 2 and nameBool is True:
+            break
+        elif nameCheck == 2:
+            nameCheck = 0
+            nameBool = True
+        elif nameBool is False:
+            surName += s
+        else:
+            givenNames += s
+
+    return surName, givenNames
 
 
 # 이미지 크롭
@@ -158,7 +248,7 @@ def showImg(det, names, im0s, colors):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--weights', nargs='+', type=str, default='weights/passport.pt')
+    parser.add_argument('--weights', nargs='+', type=str, default='weights/passport_x_v2_0617.pt')
     parser.add_argument('--img', type=str, default='data/images')
     parser.add_argument('--img-size', type=int, default=640)
     parser.add_argument('--conf', type=float, default=0.50)
