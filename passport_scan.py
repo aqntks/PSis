@@ -37,7 +37,17 @@ def main(opt):
     # 추론 실행
     if device.type != 'cpu':
         model(torch.zeros(1, 3, img_size, img_size).to(device).type_as(next(model.parameters())))
-    for path, img, im0s, vid_cap in dataset:
+    for path, img, im0s, vid_cap, real in dataset:
+
+        # perspective_img = img.transpose(1, 2, 0)[:, :, ::-1]
+        # perspective_img = perspective(perspective_img)
+        # # im0s = perspective_img
+        # img = perspective_img.transpose(2, 0, 1)[::-1, :, :].copy()
+        #
+        # print(im0s.shape)
+        # print(img.shape)
+
+
         # 이미지 정규화
         img = torch.from_numpy(img).to(device)
         img = img.half() if half else img.float()
@@ -49,9 +59,9 @@ def main(opt):
         prediction = model(img, augment=False)[0]
         prediction = non_max_suppression(prediction, confidence, iou, classes=None, agnostic=False)
 
-        if len(prediction[0]) < 75:
-            print('### Detection Fail ###')
-            continue
+        # if len(prediction[0]) < 75:
+        #     print('### Detection Fail ###')
+        #     continue
 
         # 검출 값 처리
         for i, det in enumerate(prediction):
@@ -67,7 +77,6 @@ def main(opt):
                         break
 
                 if mrz_rect is None:
-
                     print("mrz 안나옴")
                     continue
 
@@ -77,33 +86,46 @@ def main(opt):
                     if (rect[0] > mrz_rect[0]) and (rect[1] > mrz_rect[1]) and (rect[2] < mrz_rect[2]) and (
                             rect[3] < mrz_rect[3]):
                         cls_name = names[int(cls)] if names[int(cls)] != 'sign' else '<'
-                        mrzStr.append((rect[0], rect[1], cls_name))
+                        mrzStr.append((rect, cls_name, conf))
 
-                mrzStr.sort(key=lambda x: x[1])
-                mrzFirst, mrzSecond = mrzStr[0:44], mrzStr[44:]
-                mrzFirst.sort(key=lambda x: x[0])
-                mrzSecond.sort(key=lambda x: x[0])
+                mrzStr.sort(key=lambda x: x[0][1])
 
-                for x, y, mrz_cls in mrzFirst:
-                    result += mrz_cls
-                result += '\n'
-                for x, y, mrz_cls in mrzSecond:
-                    result += mrz_cls
+                # 라인 단위 정렬
+                mrzFirst, mrzSecond = line_by_line_sort(mrzStr)
 
-            showImg(det, names, im0s, colors)
-        # print('\n' + result)
+                # 한번에 정렬
+                # mrzFirst, mrzSecond = all_sort(mrzStr)
 
-        surName, givenNames = spiltName(result[5:44])
-        passportType = typeCorrection(mrzCorrection(result[0:2].replace('<', ''), 'dg2en'))
-        issuingCounty = nationCorrection(mrzCorrection(result[2:5], 'dg2en'))
-        nationality = nationCorrection(mrzCorrection(result[55:58], 'dg2en'))
-        passportNo = result[45:54].replace('<', '')
+                mrzFirst, mrzSecond = remove_intersect_box(mrzFirst), remove_intersect_box(mrzSecond)
+
+                firstLine, secondLine = "", ""
+                for rect, mrz_cls, conf in mrzFirst:
+                    firstLine += mrz_cls
+                for rect, mrz_cls, conf in mrzSecond:
+                    secondLine += mrz_cls
+
+                if len(firstLine) < 44:
+                    for i in range(len(firstLine), 44):
+                        firstLine += '<'
+
+                if len(secondLine) < 44:
+                    for i in range(len(secondLine), 44):
+                        secondLine += '<'
+
+            showImg(det, names, im0s, colors, real)
+
+        surName, givenNames = spiltName(firstLine[5:44])
+        passportType = typeCorrection(mrzCorrection(firstLine[0:2].replace('<', ''), 'dg2en'))
+        issuingCounty = nationCorrection(mrzCorrection(firstLine[2:5], 'dg2en'))
         sur = mrzCorrection(surName.replace('<', ' ').strip(), 'dg2en')
         given = mrzCorrection(givenNames.replace('<', ' ').strip(), 'dg2en')
-        personalNo = mrzCorrection(result[73:80].replace('<', ''), 'en2dg')
-        birth = mrzCorrection(result[58:64].replace('<', ''), 'en2dg')
-        sex = sexCorrection(mrzCorrection(result[65].replace('<', ''), 'dg2en'))
-        expiry = mrzCorrection(result[66:72].replace('<', ''), 'en2dg')
+
+        passportNo = secondLine[0:9].replace('<', '')
+        nationality = nationCorrection(mrzCorrection(secondLine[10:13], 'dg2en'))
+        birth = mrzCorrection(secondLine[13:19].replace('<', ''), 'en2dg')
+        sex = sexCorrection(mrzCorrection(secondLine[20].replace('<', ''), 'dg2en'))
+        expiry = mrzCorrection(secondLine[21:27].replace('<', ''), 'en2dg')
+        personalNo = mrzCorrection(secondLine[28:35].replace('<', ''), 'en2dg')
 
         # result print
         print("\n\n--------- Passport Scan Result ---------")
@@ -119,6 +141,69 @@ def main(opt):
         print('Date of expiry  :', expiry)
         print("----------------------------------------\n")
         cv2.waitKey(0)
+
+
+# 검출 박스 상자의 겹친 비율
+def compute_intersect_ratio(rect1, rect2):
+    x1, y1, x2, y2 = rect1[0], rect1[1], rect1[2], rect1[3]
+    x3, y3, x4, y4 = rect2[0], rect2[1], rect2[2], rect2[3]
+
+    if x2 < x3: return 0
+    if x1 > x4: return 0
+    if y2 < y3: return 0
+    if y1 > y4: return 0
+
+    left_up_x = max(x1, x3)
+    left_up_y = max(y1, y3)
+    right_down_x = min(x2, x4)
+    right_down_y = min(y2, y4)
+
+    width = right_down_x - left_up_x
+    height = right_down_y - left_up_y
+
+    original = (y2 - y1) * (x2 - x1)
+    intersect = width * height
+
+    ratio = int(intersect / original * 100)
+
+    return ratio
+
+
+# 겹친 상자 제거 (30% 이상)
+def remove_intersect_box(mrzLine):
+    i, line = 0, mrzLine.copy()
+    while True:
+        if i > len(line) - 2: break
+        if compute_intersect_ratio(line[i][0], line[i+1][0]) > 30:
+            lose = i if line[i][2] < line[i+1][2] else i+1
+            del line[lose]
+        else: i += 1
+
+    return line
+
+
+# 라인단위 정렬
+def line_by_line_sort(mrzStr):
+    middleChar, mrzFirst, mrzSecond = mrzStr[0], [], []
+    for c in mrzStr:
+        if c[0][1] < middleChar[0][3]:
+            mrzFirst.append(c)
+        else:
+            mrzSecond.append(c)
+
+    mrzFirst.sort(key=lambda x: x[0][0])
+    mrzSecond.sort(key=lambda x: x[0][0])
+
+    return mrzFirst, mrzSecond
+
+
+# 검출 값 한꺼번에 정렬
+def all_sort(mrzStr):
+    mrzFirst, mrzSecond = mrzStr[0:44], mrzStr[44:]
+    mrzFirst.sort(key=lambda x: x[0])
+    mrzSecond.sort(key=lambda x: x[0])
+
+    return mrzFirst, mrzSecond
 
 
 # 국가 보정
@@ -140,10 +225,16 @@ def nationCorrection(value):
         if nation == value:
             return value
 
+    strFront = value[0:2]
+    strBack = value[1:]
+    strMiddle = value[0] + value[2]
+    if strFront == 'KO': return 'KOR'
+    if strBack == 'OR': return 'KOR'
+    if strMiddle == 'KR': return 'KOR'
+
     count, resultNation = 0, ''
 
     # 앞에 두자리 맞으면 비슷한 국가 출력
-    strFront = value[0:2]
     for nation in nationality:
         if len(nation) != 3: continue
         if count > 1: return nation  # 오탐일 경우 재 탐색하는 기능 여부에 따라 수정
@@ -155,7 +246,6 @@ def nationCorrection(value):
     count, resultNation = 0, ''
 
     # 뒤의 두자리 맞으면 비슷한 국가 출력
-    strBack = value[1:]
     for nation in nationality:
         if len(nation) != 3: continue
         if count > 1: return nation   # 오탐일 경우 재 탐색하는 기능 여부에 따라 수정
@@ -167,7 +257,6 @@ def nationCorrection(value):
     count, resultNation = 0, ''
 
     # 중간만 틀렸을 때 비슷한 국가 출력
-    strMiddle = value[0] + value[2]
     for nation in nationality:
         nation = nation[0] + nation[2]
         if len(nation) != 3: continue
@@ -236,22 +325,22 @@ def nonCheck(item, obj):
 
 
 # 이미지 출력 (openCV)
-def showImg(det, names, im0s, colors):
-    realImg, drawImg = im0s.copy(), im0s.copy()
+def showImg(det, names, im0s, colors, real):
+    realImg, drawImg = real.copy(), im0s.copy()
     for *rect, conf, cls in reversed(det):
         label = f'{names[int(cls)]} {conf:.2f}'
         plot_one_box(rect, drawImg, label=label, color=colors[int(cls)], line_thickness=1)
 
-    appendImg = np.append(realImg, drawImg, axis=1)
-    cv2.imshow("result", cv2.resize(appendImg, (1616, 504)))
+    appendImg = np.append(cv2.resize(realImg, (drawImg.shape[1], drawImg.shape[0])), drawImg, axis=1)
+    cv2.imshow("result", cv2.resize(appendImg, (1280, 400)))
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--weights', nargs='+', type=str, default='weights/passport_x_v2_0617.pt')
+    parser.add_argument('--weights', nargs='+', type=str, default='weights/passport_m.pt')
     parser.add_argument('--img', type=str, default='data/images')
     parser.add_argument('--img-size', type=int, default=640)
-    parser.add_argument('--conf', type=float, default=0.50)
+    parser.add_argument('--conf', type=float, default=0.25)
     parser.add_argument('--iou', type=float, default=0.45)
     parser.add_argument('--device', type=str, default='cpu')
     option = parser.parse_args()
