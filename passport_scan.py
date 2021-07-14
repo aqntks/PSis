@@ -1,6 +1,7 @@
 import cv2
 import torch
 import numpy as np
+import math
 from numpy import random
 
 import argparse
@@ -39,15 +40,6 @@ def main(opt):
         model(torch.zeros(1, 3, img_size, img_size).to(device).type_as(next(model.parameters())))
     for path, img, im0s, vid_cap, real in dataset:
 
-        # perspective_img = img.transpose(1, 2, 0)[:, :, ::-1]
-        # perspective_img = perspective(perspective_img)
-        # # im0s = perspective_img
-        # img = perspective_img.transpose(2, 0, 1)[::-1, :, :].copy()
-        #
-        # print(im0s.shape)
-        # print(img.shape)
-
-
         # 이미지 정규화
         img = torch.from_numpy(img).to(device)
         img = img.half() if half else img.float()
@@ -59,9 +51,76 @@ def main(opt):
         prediction = model(img, augment=False)[0]
         prediction = non_max_suppression(prediction, confidence, iou, classes=None, agnostic=False)
 
-        # if len(prediction[0]) < 75:
-        #     print('### Detection Fail ###')
-        #     continue
+        rect_list, det_tmp = [], []
+        for _, det in enumerate(prediction):
+            obj, det[:, :4] = {}, scale_coords(img.shape[2:], det[:, :4], im0s.shape).round()
+            detect = det
+
+        # 검출 제대로 안된 경우 로테이션
+        if len(detect) < 50:
+            for deg in [cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180, cv2.ROTATE_90_COUNTERCLOCKWISE]:
+                r_im0s = cv2.rotate(real, deg)
+                r_img = letterbox(r_im0s, img_size, stride=stride)[0]
+
+                r_img = r_img[:, :, ::-1].transpose(2, 0, 1)
+                r_img = np.ascontiguousarray(r_img)
+
+                # 이미지 정규화
+                r_img = torch.from_numpy(r_img).to(device)
+                r_img = r_img.half() if half else r_img.float()
+                r_img /= 255.0
+                if r_img.ndimension() == 3:
+                    r_img = r_img.unsqueeze(0)
+
+                # 추론 & NMS 적용
+                r_prediction = model(r_img, augment=False)[0]
+                r_prediction = non_max_suppression(r_prediction, confidence, iou, classes=None, agnostic=False)
+
+                for _, det in enumerate(r_prediction):
+                    obj, det[:, :4] = {}, scale_coords(r_img.shape[2:], det[:, :4], r_im0s.shape).round()
+                    r_det = det
+                if len(r_det) > 70:
+                    im0s = r_im0s
+                    img = r_img
+                    prediction = r_prediction
+                    detect = r_det
+                    break
+
+        for *rect, conf, cls in detect:
+            if names[int(cls)] != 'mrz':
+                det_tmp.append((rect, conf))
+
+        rect_list = unsorted_remove_intersect_box(det_tmp)
+
+        if len(rect_list) < 2:
+            continue
+
+        # 기울기 조정
+        rect_list.sort(key=lambda x: x[0])
+        firstChar = rect_list[0] if rect_list[0][1] < rect_list[1][1] else rect_list[1]
+        lastChar = rect_list[len(rect_list) - 1] \
+            if rect_list[len(rect_list) - 1][1] < rect_list[len(rect_list) - 2][1] else rect_list[len(rect_list) - 2]
+
+        p1_x, p1_y = firstChar[0], firstChar[1]
+        p2_x, p2_y = lastChar[0], lastChar[1]
+        degree = degree_detection(p1_x, p1_y, p2_x, p2_y)
+        im0s = affine_rotation(im0s, degree)
+
+        img = letterbox(im0s, img_size, stride=stride)[0]
+
+        img = img[:, :, ::-1].transpose(2, 0, 1)
+        img = np.ascontiguousarray(img)
+
+        # 이미지 정규화
+        img = torch.from_numpy(img).to(device)
+        img = img.half() if half else img.float()
+        img /= 255.0
+        if img.ndimension() == 3:
+            img = img.unsqueeze(0)
+
+        # 추론 & NMS 적용
+        prediction = model(img, augment=False)[0]
+        prediction = non_max_suppression(prediction, confidence, iou, classes=None, agnostic=False)
 
         # 검출 값 처리
         for i, det in enumerate(prediction):
@@ -89,6 +148,9 @@ def main(opt):
                         mrzStr.append((rect, cls_name, conf))
 
                 mrzStr.sort(key=lambda x: x[0][1])
+
+                # 라인단위 정렬 v2
+                # mrzFirst, mrzSecond = sort_v2(mrzStr)
 
                 # 라인 단위 정렬
                 mrzFirst, mrzSecond = line_by_line_sort(mrzStr)
@@ -143,6 +205,39 @@ def main(opt):
         cv2.waitKey(0)
 
 
+def letterbox(img, new_shape=(640, 640), color=(114, 114, 114), auto=True, scaleFill=False, scaleup=True, stride=32):
+    # Resize and pad image while meeting stride-multiple constraints
+    shape = img.shape[:2]  # current shape [height, width]
+    if isinstance(new_shape, int):
+        new_shape = (new_shape, new_shape)
+
+    # Scale ratio (new / old)
+    r = min(new_shape[0] / shape[0], new_shape[1] / shape[1])
+    if not scaleup:  # only scale down, do not scale up (for better test mAP)
+        r = min(r, 1.0)
+
+    # Compute padding
+    ratio = r, r  # width, height ratios
+    new_unpad = int(round(shape[1] * r)), int(round(shape[0] * r))
+    dw, dh = new_shape[1] - new_unpad[0], new_shape[0] - new_unpad[1]  # wh padding
+    if auto:  # minimum rectangle
+        dw, dh = np.mod(dw, stride), np.mod(dh, stride)  # wh padding
+    elif scaleFill:  # stretch
+        dw, dh = 0.0, 0.0
+        new_unpad = (new_shape[1], new_shape[0])
+        ratio = new_shape[1] / shape[1], new_shape[0] / shape[0]  # width, height ratios
+
+    dw /= 2  # divide padding into 2 sides
+    dh /= 2
+
+    if shape[::-1] != new_unpad:  # resize
+        img = cv2.resize(img, new_unpad, interpolation=cv2.INTER_LINEAR)
+    top, bottom = int(round(dh - 0.1)), int(round(dh + 0.1))
+    left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
+    img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)  # add border
+    return img, ratio, (dw, dh)
+
+
 # 검출 박스 상자의 겹친 비율
 def compute_intersect_ratio(rect1, rect2):
     x1, y1, x2, y2 = rect1[0], rect1[1], rect1[2], rect1[3]
@@ -180,6 +275,62 @@ def remove_intersect_box(mrzLine):
         else: i += 1
 
     return line
+
+
+# 겹친 상자 제거 (30% 이상) - 정렬 하기 힘든 경우
+def unsorted_remove_intersect_box(lists):
+    for i in range(0, len(lists)-1):
+        if i > len(lists)-2: break
+        for y in range(i+1, len(lists)-1):
+            if y > len(lists)-1: break
+            if compute_intersect_ratio(lists[i][0], lists[y][0]) > 30:
+                if lists[i][1] > lists[y][1]:
+                    del lists[y]
+                    y -= 1
+                else:
+                    del list[i]
+                    i -= 1
+
+    result = []
+    for l in lists:
+        result.append(l[0])
+    return result
+
+
+# 어파인 로테이션
+def affine_rotation(src, angle):
+    cp = (src.shape[1] / 2, src.shape[0] / 2)
+    affine_mat = cv2.getRotationMatrix2D(cp, angle, 1)
+
+    dst = cv2.warpAffine(src, affine_mat, (0, 0))
+    return dst
+
+
+# 각도 검출
+def degree_detection(p1_x, p1_y, p2_x, p2_y):
+    radian = math.atan2(p2_y - p1_y, p2_x - p1_x)
+    return radian * 180 / np.pi
+
+
+# 라인단위 정렬
+def sort_v2(mrzStr):
+    mrzStr.sort(key=lambda x: x[0][0])
+
+    firstLine_firstChar = mrzStr[0] if mrzStr[0][0][1] < mrzStr[1][0][1] else mrzStr[1]
+    firstLine_lastChar = mrzStr[len(mrzStr) - 1] if mrzStr[len(mrzStr) - 1][0][1] < mrzStr[len(mrzStr) - 2][0][1] else mrzStr[len(mrzStr) - 2]
+    standard = firstLine_firstChar if firstLine_firstChar[0][1] > firstLine_lastChar[0][1] else firstLine_lastChar
+
+    mrzFirst, mrzSecond = [], []
+    for c in mrzStr:
+        if c[0][1] <= standard[0][1]:
+            mrzFirst.append(c)
+        else:
+            mrzSecond.append(c)
+
+    mrzFirst.sort(key=lambda x: x[0][0])
+    mrzSecond.sort(key=lambda x: x[0][0])
+
+    return mrzFirst, mrzSecond
 
 
 # 라인단위 정렬

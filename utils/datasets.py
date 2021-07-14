@@ -187,7 +187,7 @@ class LoadImages:  # for inference
             # Read image
             self.count += 1
             real = cv2.imread(path)  # BGR
-
+            # img0 = real
             img0 = self.crop((0, int(real.shape[0] / 2), real.shape[1], real.shape[0]), real)
             # img0 = perspective(img0)
             assert img0 is not None, 'Image Not Found ' + path
