@@ -1,5 +1,5 @@
 import os
-from core.model_set import attempt_load
+from models.experimental import attempt_load
 from core.passport_scan import *
 
 # 설정

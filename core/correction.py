@@ -2,7 +2,7 @@
 # 국가 보정
 def nationCorrection(value):
     # 국가명 파일 로드
-    f = open("../res/nationality.txt", 'r')
+    f = open("res/nationality.txt", 'r')
     nationality = []
     while True:
         line = f.readline()

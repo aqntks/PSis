@@ -3,7 +3,7 @@ from numpy import random
 from core.util import *
 from core.correction import *
 from core.general import *
-from passport import Passport
+from core.passport import Passport
 from core.image_handler import ImagePack
 
 
