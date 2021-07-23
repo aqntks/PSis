@@ -41,6 +41,20 @@ class ImagePack:
 
         return self.t_img, self.n_img
 
+    def passportCrop(self, mrz):
+        x1, y1, x2, y2 = mrz
+        mrzHeight = y2 - y1
+
+        cropX1 = x1 - mrzHeight if (x1 - mrzHeight) > 0 else 0
+        cropX2 = x2 + mrzHeight if (x2 + mrzHeight) < self.n_img.shape[1] else self.n_img.shape[1]
+        cropY1 = y1 - mrzHeight * 3 if (y1 - mrzHeight * 3) > 0 else 0
+        cropY2 = y2 + mrzHeight if (y2 + mrzHeight) < self.n_img.shape[0] else self.n_img.shape[0]
+
+        self.n_img = self.crop((cropX1, cropY1, cropX2, cropY2), self.n_img)
+        self.t_img = self.img2pyt(self.n_img)
+
+        return self.t_img, self.n_img
+
     def getOImg(self):
         return self.o_img
 
