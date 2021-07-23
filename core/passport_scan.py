@@ -10,7 +10,7 @@ from core.image_handler import ImagePack
 def detecting(model, img, im0s, device, img_size, half, confidence, iou):
     if device.type != 'cpu':
         model(torch.zeros(1, 3, img_size, img_size).to(device).type_as(next(model.parameters())))
-    
+
     # 이미지 정규화
     img = torch.from_numpy(img).to(device)
     img = img.half() if half else img.float()
@@ -30,57 +30,88 @@ def detecting(model, img, im0s, device, img_size, half, confidence, iou):
     return detect
 
 
-def detect(path, model, device, opt):
-    mrz_thres = 80
+def detect(path, model, device, opt, mode=''):
+    mrz_thres = 50
     imgz, confidence, iou = opt
+    fileName = path.split('/')[-1]
+    detLenList = []
+
     half = device.type != 'cpu'
-    stride = int(model.stride.max())
-    img_size = check_img_size(imgz, s=stride)
     if half:
         model.half()
+    stride = int(model.stride.max())
+    img_size = check_img_size(imgz, s=stride)
 
     # 데이터 세팅
     image_pack = ImagePack(path, img_size, stride)
     real = image_pack.getOImg()
 
-    # 이미지 크롭
-    img, im0s = image_pack.setYCrop()
-
     # 클래스, 색상 셋 로드
     names = model.module.names if hasattr(model, 'module') else model.names
     colors = [[random.randint(0, 255) for _ in range(3)] for _ in names]
 
-    # rotate 여부 판단
+    img, im0s = image_pack.getImg()
     det = detecting(model, img, im0s, device, img_size, half, confidence, iou)
 
-    mrz = False
+    detLenList.append(len(det))
+    mrzRect = False
+    # mrz 존재 여부 판단
     for *rect, conf, cls in det:
-        if names[int(cls)] != 'mrz':
-            mrz = True
+        if names[int(cls)] == 'mrz':
+            mrzRect = rect
 
     # mrz가 없거나, 검출 항목이 mrz_thres개 이하인경우 rotate (회전된 이미지라고 판단)
-    if mrz is False or len(det) < mrz_thres:
-
+    mrz = False
+    if mrzRect is False or len(det) < mrz_thres:
         for deg in [cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180, cv2.ROTATE_90_COUNTERCLOCKWISE]:
             r_im0s = cv2.rotate(real, deg)
             image_pack.setImg(r_im0s)
-            # 이미지 크롭
-            img, im0s = image_pack.setYCrop()
+
+            img, im0s = image_pack.getImg()
 
             det = detecting(model, img, im0s, device, img_size, half, confidence, iou)
+            detLenList.append(len(det))
 
             for *rect, conf, cls in det:
-                if names[int(cls)] != 'mrz':
+                if names[int(cls)] == 'mrz':
                     mrz = True
+                    mrzRect = rect
 
             # mrz가 검출되고 검출 항목이 mrz_thres개 이상이면 정상
-            if mrz and len(det) > mrz_thres:
-                im0s = r_im0s
+            if mrzRect and len(det) > mrz_thres:
                 break
+            else:
+                mrzRect = False
 
     # 4방향 전부 mrz 검출 실패 또는 검출 항목 mrz_thres개 이하
-    if mrz is False or len(det) < mrz_thres:
+    if mrzRect is False and mrz is False:
+        print(f'{fileName} 검출 실패')
+        if mode == 'show':
+            cv2.imshow("result", cv2.resize(real, (640, 400)))
+            cv2.waitKey(0)
         return None
+
+    # mrz는 나왔는데 검출 항목 mrz_thres개 이하인 경우 최대로 검출된 방향으로 처리
+    if mrzRect is False and mrz is True and len(detLenList) == 4:
+        index = detLenList.index(max(detLenList))
+        rot_list = [cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180, cv2.ROTATE_90_COUNTERCLOCKWISE]
+
+        if index != 0:
+            r_im0s = cv2.rotate(real, rot_list[index-1])
+            image_pack.setImg(r_im0s)
+        else:
+            image_pack.setImg(real)
+
+        img, im0s = image_pack.getImg()
+        det = detecting(model, img, im0s, device, img_size, half, confidence, iou)
+
+        for *rect, conf, cls in det:
+            if names[int(cls)] == 'mrz':
+                mrzRect = rect
+
+    # 이미지 크롭
+    img, im0s = image_pack.passportCrop(mrzRect)
+    det = detecting(model, img, im0s, device, img_size, half, confidence, iou)
 
     # 중복 상자 제거
     det_tmp = []
@@ -116,6 +147,10 @@ def detect(path, model, device, opt):
 
     # mrz 검출 실패
     if mrz_rect is None:
+        print(f'{fileName} 검출 실패')
+        if mode == 'show':
+            showImg(det, names, im0s, colors, real)
+            cv2.waitKey(0)
         return None
 
     # mrz 정렬
@@ -168,8 +203,26 @@ def detect(path, model, device, opt):
     expiry = mrzCorrection(secondLine[21:27].replace('<', ''), 'en2dg')
     personalNo = mrzCorrection(secondLine[28:35].replace('<', ''), 'en2dg')
 
-    showImg(det, names, im0s, colors, real)
+    passport = Passport(passportType, issuingCounty, sur, given, passportNo, nationality, birth, sex, expiry,
+                        personalNo)
 
-    return Passport(passportType, issuingCounty, sur, given, passportNo, nationality, birth, sex, expiry, personalNo)
+    if mode == '':
+        print(f'{fileName} 검출 성공')
+    if mode == 'print':
+        printResult(fileName, passport)
+    if mode == 'show':
+        showImg(det, names, im0s, colors, real)
+        printResult(fileName, passport)
+        cv2.waitKey(0)
+    if mode == 'save':
+        drawImg = im0s.copy()
+        for *rect, conf, cls in reversed(det):
+            label = f'{names[int(cls)]} {conf:.2f}'
+            plot_one_box(rect, drawImg, label=label, color=colors[int(cls)], line_thickness=1)
+        printResult(fileName, passport)
+        cv2.imwrite(f'data/result/ori_{fileName}', real)
+        cv2.imwrite(f'data/result/det_{fileName}', drawImg)
+
+    return passport
 
 

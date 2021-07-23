@@ -182,3 +182,23 @@ def showImg(det, names, im0s, colors, real):
     cv2.imshow("result", cv2.resize(appendImg, (1280, 400)))
 
 
+def printResult(fileName, passport):
+    if passport is None:
+        print(print(f"\n\n----- {fileName} 검출 실패 -----"))
+        return
+
+    passportType, issuingCounty, sur, given, passportNo, nationality, birth, sex, expiry, personalNo = passport.all()
+
+    # result print
+    print(f"\n\n----- {fileName} Passport Scan Result -----")
+    print('Type            :', passportType)
+    print('Issuing county  :', issuingCounty)
+    print('Passport No.    :', passportNo)
+    print('Surname         :', sur)
+    print('Given names     :', given)
+    print('Nationality     :', nationality)
+    # print('Personal No.    :', personalNo)
+    print('Date of birth   :', birth)
+    print('Sex             :', sex)
+    print('Date of expiry  :', expiry)
+    print("---------------------------------------\n")

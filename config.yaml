@@ -1,0 +1,7 @@
+
+weights: weights/passport_m.pt
+images: data/images
+img_size: 640
+confidence: 0.5
+iou: 0.45
+gpu: -1
