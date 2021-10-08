@@ -31,10 +31,9 @@ def detecting(model, img, im0s, device, img_size, half, confidence, iou):
 
 
 def detect(path, model, device, opt, mode=''):
-    mrz_thres = 50
+    mrz_thres = 80
     imgz, confidence, iou = opt
     fileName = path.split('/')[-1]
-    detLenList = []
 
     half = device.type != 'cpu'
     if half:
@@ -46,72 +45,48 @@ def detect(path, model, device, opt, mode=''):
     image_pack = ImagePack(path, img_size, stride)
     real = image_pack.getOImg()
 
+    # 이미지 크롭
+    img, im0s = image_pack.setYCrop()
+
     # 클래스, 색상 셋 로드
     names = model.module.names if hasattr(model, 'module') else model.names
     colors = [[random.randint(0, 255) for _ in range(3)] for _ in names]
 
-    img, im0s = image_pack.getImg()
+    # rotate 여부 판단
     det = detecting(model, img, im0s, device, img_size, half, confidence, iou)
 
-    detLenList.append(len(det))
-    mrzRect = False
-    # mrz 존재 여부 판단
+    mrz = False
     for *rect, conf, cls in det:
-        if names[int(cls)] == 'mrz':
-            mrzRect = rect
+        if names[int(cls)] != 'mrz':
+            mrz = True
 
     # mrz가 없거나, 검출 항목이 mrz_thres개 이하인경우 rotate (회전된 이미지라고 판단)
-    mrz = False
-    if mrzRect is False or len(det) < mrz_thres:
+    if mrz is False or len(det) < mrz_thres:
+
         for deg in [cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180, cv2.ROTATE_90_COUNTERCLOCKWISE]:
             r_im0s = cv2.rotate(real, deg)
             image_pack.setImg(r_im0s)
-
-            img, im0s = image_pack.getImg()
+            # 이미지 크롭
+            img, im0s = image_pack.setYCrop()
 
             det = detecting(model, img, im0s, device, img_size, half, confidence, iou)
-            detLenList.append(len(det))
 
             for *rect, conf, cls in det:
-                if names[int(cls)] == 'mrz':
+                if names[int(cls)] != 'mrz':
                     mrz = True
-                    mrzRect = rect
 
             # mrz가 검출되고 검출 항목이 mrz_thres개 이상이면 정상
-            if mrzRect and len(det) > mrz_thres:
+            if mrz and len(det) > mrz_thres:
+                im0s = r_im0s
                 break
-            else:
-                mrzRect = False
 
     # 4방향 전부 mrz 검출 실패 또는 검출 항목 mrz_thres개 이하
-    if mrzRect is False and mrz is False:
+    if mrz is False or len(det) < mrz_thres:
         print(f'{fileName} 검출 실패')
         if mode == 'show':
             cv2.imshow("result", cv2.resize(real, (640, 400)))
             cv2.waitKey(0)
         return None
-
-    # mrz는 나왔는데 검출 항목 mrz_thres개 이하인 경우 최대로 검출된 방향으로 처리
-    if mrzRect is False and mrz is True and len(detLenList) == 4:
-        index = detLenList.index(max(detLenList))
-        rot_list = [cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180, cv2.ROTATE_90_COUNTERCLOCKWISE]
-
-        if index != 0:
-            r_im0s = cv2.rotate(real, rot_list[index-1])
-            image_pack.setImg(r_im0s)
-        else:
-            image_pack.setImg(real)
-
-        img, im0s = image_pack.getImg()
-        det = detecting(model, img, im0s, device, img_size, half, confidence, iou)
-
-        for *rect, conf, cls in det:
-            if names[int(cls)] == 'mrz':
-                mrzRect = rect
-
-    # 이미지 크롭
-    img, im0s = image_pack.passportCrop(mrzRect)
-    det = detecting(model, img, im0s, device, img_size, half, confidence, iou)
 
     # 중복 상자 제거
     det_tmp = []
@@ -193,15 +168,11 @@ def detect(path, model, device, opt, mode=''):
     surName, givenNames = spiltName(firstLine[5:44])
     passportType = typeCorrection(mrzCorrection(firstLine[0:2].replace('<', ''), 'dg2en'))
     issuingCounty = nationCorrection(mrzCorrection(firstLine[2:5], 'dg2en'))
-    if issuingCounty == 'D<<':
-        issuingCounty = 'DEU'
     sur = mrzCorrection(surName.replace('<', ' ').strip(), 'dg2en')
     given = mrzCorrection(givenNames.replace('<', ' ').strip(), 'dg2en')
 
     passportNo = secondLine[0:9].replace('<', '')
     nationality = nationCorrection(mrzCorrection(secondLine[10:13], 'dg2en'))
-    if nationality == 'D<<':
-        nationality = 'DEU'
     birth = mrzCorrection(secondLine[13:19].replace('<', ''), 'en2dg')
     sex = sexCorrection(mrzCorrection(secondLine[20].replace('<', ''), 'dg2en'))
     expiry = mrzCorrection(secondLine[21:27].replace('<', ''), 'en2dg')

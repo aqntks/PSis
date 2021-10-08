@@ -53,7 +53,7 @@ def unsorted_remove_intersect_box(lists):
                     del lists[y]
                     y -= 1
                 else:
-                    del list[i]
+                    del lists[i]
                     i -= 1
 
     result = []
